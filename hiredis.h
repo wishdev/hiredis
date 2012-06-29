@@ -39,6 +39,7 @@
 #define HIREDIS_MINOR 10
 #define HIREDIS_PATCH 1
 
+#define REDIS_NULL -2
 #define REDIS_ERR -1
 #define REDIS_OK 0
 
@@ -196,6 +197,12 @@ int redisAppendCommandArgv(redisContext *c, int argc, const char **argv, const s
 void *redisvCommand(redisContext *c, const char *format, va_list ap);
 void *redisCommand(redisContext *c, const char *format, ...);
 void *redisCommandArgv(redisContext *c, int argc, const char **argv, const size_t *argvlen);
+
+void redisCompleteCommand(redisContext *c, const char *format, ...);
+
+char* redisHashStringKey(redisContext *c, const char *hash, const char *key);
+int   redisHashIntKey(redisContext *c, const char *hash, const char *key);
+int   redisIntCommand(redisContext *c, const char *format, ...);
 
 #ifdef __cplusplus
 }

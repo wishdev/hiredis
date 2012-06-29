@@ -155,9 +155,11 @@ redisAsyncContext *redisAsyncConnectUnix(const char *path) {
     return ac;
 }
 
-int redisAsyncSetConnectCallback(redisAsyncContext *ac, redisConnectCallback *fn) {
+int redisAsyncSetConnectCallback(redisAsyncContext *ac, redisCallbackFn *fn, void *privdata) {
     if (ac->onConnect == NULL) {
-        ac->onConnect = fn;
+        ac->onConnect = malloc(sizeof(redisCallback));
+        ac->onConnect->fn = fn;
+        ac->onConnect->privdata = privdata;
 
         /* The common way to detect an established connection is to wait for
          * the first write event to be fired. This assumes the related event
@@ -168,9 +170,11 @@ int redisAsyncSetConnectCallback(redisAsyncContext *ac, redisConnectCallback *fn
     return REDIS_ERR;
 }
 
-int redisAsyncSetDisconnectCallback(redisAsyncContext *ac, redisDisconnectCallback *fn) {
+int redisAsyncSetDisconnectCallback(redisAsyncContext *ac, redisCallbackFn *fn, void *privdata) {
     if (ac->onDisconnect == NULL) {
-        ac->onDisconnect = fn;
+        ac->onDisconnect = malloc(sizeof(redisCallback));
+        ac->onDisconnect->fn = fn;
+        ac->onDisconnect->privdata = privdata;
         return REDIS_OK;
     }
     return REDIS_ERR;
@@ -212,11 +216,11 @@ static int __redisShiftCallback(redisCallbackList *list, redisCallback *target) 
     return REDIS_ERR;
 }
 
-static void __redisRunCallback(redisAsyncContext *ac, redisCallback *cb, redisReply *reply) {
+static void __redisRunCallback(redisAsyncContext *ac, redisCallback *cb, redisReply *reply, int status) {
     redisContext *c = &(ac->c);
     if (cb->fn != NULL) {
         c->flags |= REDIS_IN_CALLBACK;
-        cb->fn(ac,reply,cb->privdata);
+        cb->fn(ac,reply,cb->privdata,status);
         c->flags &= ~REDIS_IN_CALLBACK;
     }
 }
@@ -230,22 +234,22 @@ static void __redisAsyncFree(redisAsyncContext *ac) {
 
     /* Execute pending callbacks with NULL reply. */
     while (__redisShiftCallback(&ac->replies,&cb) == REDIS_OK)
-        __redisRunCallback(ac,&cb,NULL);
+        __redisRunCallback(ac,&cb,NULL,REDIS_NULL);
 
     /* Execute callbacks for invalid commands */
     while (__redisShiftCallback(&ac->sub.invalid,&cb) == REDIS_OK)
-        __redisRunCallback(ac,&cb,NULL);
+        __redisRunCallback(ac,&cb,NULL,REDIS_NULL);
 
     /* Run subscription callbacks callbacks with NULL reply */
     it = dictGetIterator(ac->sub.channels);
     while ((de = dictNext(it)) != NULL)
-        __redisRunCallback(ac,dictGetEntryVal(de),NULL);
+        __redisRunCallback(ac,dictGetEntryVal(de),NULL,REDIS_NULL);
     dictReleaseIterator(it);
     dictRelease(ac->sub.channels);
 
     it = dictGetIterator(ac->sub.patterns);
     while ((de = dictNext(it)) != NULL)
-        __redisRunCallback(ac,dictGetEntryVal(de),NULL);
+        __redisRunCallback(ac,dictGetEntryVal(de),NULL,REDIS_NULL);
     dictReleaseIterator(it);
     dictRelease(ac->sub.patterns);
 
@@ -254,12 +258,20 @@ static void __redisAsyncFree(redisAsyncContext *ac) {
 
     /* Execute disconnect callback. When redisAsyncFree() initiated destroying
      * this context, the status will always be REDIS_OK. */
-    if (ac->onDisconnect && (c->flags & REDIS_CONNECTED)) {
+    if (ac->onDisconnect && ac->onDisconnect->fn && (c->flags & REDIS_CONNECTED)) {
         if (c->flags & REDIS_FREEING) {
-            ac->onDisconnect(ac,REDIS_OK);
+            __redisRunCallback(ac,ac->onDisconnect,NULL,REDIS_OK);
         } else {
-            ac->onDisconnect(ac,(ac->err == 0) ? REDIS_OK : REDIS_ERR);
+            __redisRunCallback(ac,ac->onDisconnect,NULL,(ac->err == 0) ? REDIS_OK : REDIS_ERR);
         }
+    }
+    
+    if (ac->onConnect) {
+      free(ac->onConnect);
+    }
+    
+    if (ac->onDisconnect) {
+      free(ac->onDisconnect);
     }
 
     /* Cleanup self */
@@ -400,7 +412,7 @@ void redisProcessCallbacks(redisAsyncContext *ac) {
         }
 
         if (cb.fn != NULL) {
-            __redisRunCallback(ac,&cb,reply);
+            __redisRunCallback(ac,&cb,reply,REDIS_NULL);
             c->reader->fn->freeObject(reply);
 
             /* Proceed with free'ing when redisAsyncFree() was called. */
@@ -433,14 +445,14 @@ static int __redisAsyncHandleConnect(redisAsyncContext *ac) {
         if (errno == EINPROGRESS)
             return REDIS_OK;
 
-        if (ac->onConnect) ac->onConnect(ac,REDIS_ERR);
+        if (ac->onConnect && ac->onConnect->fn) __redisRunCallback(ac,ac->onConnect,NULL,REDIS_ERR);
         __redisAsyncDisconnect(ac);
         return REDIS_ERR;
     }
 
     /* Mark context as connected. */
     c->flags |= REDIS_CONNECTED;
-    if (ac->onConnect) ac->onConnect(ac,REDIS_OK);
+    if (ac->onConnect && ac->onConnect->fn) __redisRunCallback(ac,ac->onConnect,NULL,REDIS_OK);
     return REDIS_OK;
 }
 

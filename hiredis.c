@@ -1282,3 +1282,88 @@ void *redisCommandArgv(redisContext *c, int argc, const char **argv, const size_
         return NULL;
     return __redisBlockForReply(c);
 }
+
+void redisCompleteCommand(redisContext *c, const char *format, ...) {
+    va_list ap;
+    redisReply *reply = NULL;
+    va_start(ap,format);
+    reply = redisvCommand(c,format,ap);
+    va_end(ap);
+    if (reply->type == REDIS_REPLY_ERROR) {
+        printf("Redis error - %s\n", reply->str);
+    }
+    freeReplyObject(reply);
+}
+
+int checkExistsReply(redisReply *reply) {
+    if (reply->type == REDIS_REPLY_INTEGER) {
+        return reply->integer;
+    }
+
+    return 0;
+}
+
+int checkExists(redisContext *c, const char *format, ...) {
+    va_list ap;
+    redisReply *reply = NULL;
+    va_start(ap,format);
+    reply = redisvCommand(c,format,ap);
+    va_end(ap);
+
+    int retVal = checkExistsReply(reply);
+ 
+    freeReplyObject(reply);
+
+    return retVal;
+}
+
+int checkHashEntryExists(redisContext *c, const char *hash, const char *key) {
+    if (checkExists(c, "EXISTS %s", hash) == 1) {
+        if (checkExists(c, "HEXISTS %s %s", hash, key) == 1) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+char* redisHashStringKey(redisContext *c, const char *hash, const char *key) {
+    char* retVal = NULL;
+    
+    if (checkHashEntryExists(c, hash, key) == 1) {
+        redisReply *reply = NULL;
+        reply = redisCommand(c, "HGET %s %s", hash, key);
+        if (reply->type == REDIS_REPLY_STRING) {
+            retVal = malloc(reply->len + 1);
+            strcpy(retVal, reply->str);
+        }
+        freeReplyObject(reply);
+    }
+
+    return retVal;
+}
+
+int redisHashIntKey(redisContext *c, const char *hash, const char *key) {
+    int retVal = -1;
+    char* str = redisHashStringKey(c, hash, key);
+    if (str) {
+        retVal = atoi(str);
+        free(str);
+    }
+    return retVal;
+}
+
+int redisIntCommand(redisContext *c, const char *format, ...) {
+    int retVal = -1;
+    va_list ap;
+    redisReply *reply = NULL;
+    va_start(ap,format);
+    reply = redisvCommand(c,format,ap);
+    va_end(ap);
+    if (reply->type == REDIS_REPLY_INTEGER) {
+        retVal = reply->integer;
+    }
+    freeReplyObject(reply);
+    
+    return retVal;
+}
+
